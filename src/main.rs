@@ -14,7 +14,17 @@ fn main() {
     let _ = stdout().flush();
     stdin().read_line(&mut s).expect("Incorrect input");
     s = s.trim().to_string();
-    let structure = get_structure(Path::new(&s), &[".vscode", "target", ".git"]);
+    let structure = get_structure(Path::new("../git-cuttle"), &[".vscode", "target", ".git"]);
+    println!("{:?}", structure);
+    if let Some(item) = structure {
+        plot(item, "plot.svg");
+    }
+
+    print!(">");
+    let _ = stdout().flush();
+    stdin().read_line(&mut s).expect("Incorrect input");
+    s = s.trim().to_string();
+    let structure = get_structure(Path::new("../pdbtbx"), &[".vscode", "target", ".git"]);
     println!("{:?}", structure);
     if let Some(item) = structure {
         plot(item, "plot.svg");
@@ -95,50 +105,63 @@ fn improve_positions<'a>(
     positions: Vec<(Area, f64, &'a Item)>,
     bounds: Area,
 ) -> Vec<(Area, &'a Item)> {
+    #[derive(Debug, Clone, Copy)]
+    struct Entity<'a> {
+        pos: Point,
+        size: f64,
+        speed: Point,
+        item: &'a Item,
+    }
     let center = bounds.center();
     let mut items: Vec<_> = positions
         .iter()
-        .map(|(a, s, i)| (a.center(), s, Point(0.0, 0.0), i))
+        .map(|(a, s, i)| Entity {
+            pos: a.center(),
+            size: *s,
+            speed: Point(0.0, 0.0),
+            item: i,
+        })
         .collect();
     //println!("Gravitate towards: {:?}", center);
-    for _ in 0..100 {
+    for _ in 0..1000 {
         let mut vec = (0..items.len()).collect::<Vec<_>>();
         vec.shuffle(&mut thread_rng());
         for index in vec {
             let mut item = items[index];
             // update speed
-            item.2 = (center - item.0).normalize() * 10.0 + item.2;
+            item.speed = (center - item.pos).normalize() * 0.5 + item.speed;
             //println!(
             //    "Item {} updated from {:?} with speed {:?}",
             //    index, item.0, item.2
             //);
             // update position
-            item.0 = item.0 + item.2;
+            item.pos = item.pos + item.speed;
             // handle collisions
             for other_index in (0..items.len()).filter(|i| *i != index) {
-                let other = items[other_index];
-                let min_dis = item.1 + other.1 + 5.0;
-                if item.0.distance(other.0) < min_dis {
+                let other = &items[other_index];
+                let min_dis = item.size + other.size + 5.0;
+                if item.pos.distance(other.pos) < min_dis {
                     // 'Bounce' away from the other ball, could maybe break on multiple collisions in a single frame
-                    item.2 = (item.0 - other.0).normalize() - other.2 * 0.75;
-                    items[other_index].2 = (other.0 - item.0).normalize() - item.2 * 0.75; // Push the other item a bit
+                    item.speed = (item.pos - other.pos).normalize() - other.speed * 0.75;
+                    //items[other_index].speed =
+                    //    (other.pos - item.pos).normalize() - item.speed * 0.75; // Push the other item a bit
                     for _ in 0..100 {
-                        item.0 = item.0 + item.2 * 0.1;
-                        if item.0.distance(other.0) >= min_dis {
+                        item.pos = item.pos + item.speed * 0.1;
+                        if item.pos.distance(other.pos) >= min_dis {
                             break;
                         }
                     }
                 }
             }
-            if item.0 .0 < bounds.start_x && item.2 .0 < 0.0
-                || item.0 .0 > bounds.end_x && item.2 .0 > 0.0
+            if item.pos.0 < bounds.start_x && item.speed.0 < 0.0
+                || item.pos.0 > bounds.end_x && item.speed.0 > 0.0
             {
-                item.2 .0 *= -0.75;
+                item.speed.0 *= -0.75;
             }
-            if item.0 .1 < bounds.start_y && item.2 .1 < 0.0
-                || item.0 .1 > bounds.end_y && item.2 .1 > 0.0
+            if item.pos.1 < bounds.start_y && item.speed.1 < 0.0
+                || item.pos.1 > bounds.end_y && item.speed.1 > 0.0
             {
-                item.2 .1 *= -0.75;
+                item.speed.1 *= -0.75;
             }
             //println!(
             //    "\tto: {:?} with speed {:?} collision {}",
@@ -147,14 +170,50 @@ fn improve_positions<'a>(
             items[index] = item;
         }
     }
+    let mut bounding_box = Area::new(
+        items[0].pos.0,
+        items[0].pos.1,
+        items[0].pos.0,
+        items[0].pos.1,
+    );
+    for item in &mut items {
+        if item.pos.0 - item.size < bounding_box.start_x {
+            bounding_box.start_x = item.pos.0 - item.size
+        }
+        if item.pos.0 + item.size > bounding_box.end_x {
+            bounding_box.end_x = item.pos.0 + item.size
+        }
+        if item.pos.1 - item.size < bounding_box.start_y {
+            bounding_box.start_y = item.pos.1 - item.size
+        }
+        if item.pos.1 + item.size > bounding_box.end_y {
+            bounding_box.end_y = item.pos.1 + item.size
+        }
+    }
+    let re_center = bounding_box.center() - center;
+    for item in &mut items {
+        item.pos = item.pos - re_center;
+    }
     items
         .iter()
-        .map(|(Point(x, y), s, _, i)| {
-            (
-                Area::new(x - **s / 2.0, y - **s / 2.0, x + **s / 2.0, y + **s / 2.0),
-                **i,
-            )
-        })
+        .map(
+            |Entity {
+                 pos: Point(x, y),
+                 size,
+                 item,
+                 ..
+             }| {
+                (
+                    Area::new(
+                        x - *size / 2.0,
+                        y - *size / 2.0,
+                        x + *size / 2.0,
+                        y + *size / 2.0,
+                    ),
+                    *item,
+                )
+            },
+        )
         .collect()
 }
 
@@ -226,8 +285,9 @@ impl Item {
         match self {
             Item::File { size, .. } => *size as f64,
             Item::Folder { items, .. } => {
-                25.0_f64.powi(items.len() as i32)
-                    * items.iter().fold(0.0, |acc, item| acc + item.size())
+                let sum = items.iter().fold(0.0, |acc, item| acc + item.size());
+                let len = items.len() as f64;
+                40.0_f64.powf(len * 1.15) * sum * (sum / len)
             }
         }
     }
