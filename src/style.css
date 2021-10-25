@@ -35,11 +35,11 @@ svg {
     text-anchor: middle;
     font-size: calc(var(--text-scaling) * 1em);
     font-family: sans-serif;
-    fill: var(--color-background);
+    fill: var(--color-dark);
 }
 
 .btn {
-    fill: var(--color-dark);
+    fill: var(--color-background);
     stroke: var(--color-primary);
     stroke-width: 2;
 }
@@ -54,5 +54,6 @@ svg {
 }
 
 .folder>text {
+    fill: var(--color-dark);
     transform: translateY(calc(-5 * var(--text-scaling)));
 }
