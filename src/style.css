@@ -1,0 +1,58 @@
+:root {
+    --file-text-opacity: 1;
+    --folder-text-opacity: 1;
+    --color-primary: #569CD6;
+    --color-primary-shade: #1d4f78;
+    --color-secondary: #4EC9B0;
+    --color-tertiary: #F48771;
+    --color-dark: #1E1E1E;
+    --color-light: #7E7E7E;
+    --color-background: #fff;
+    --text-scaling: 1;
+}
+
+@media screen and (prefers-color-scheme: dark) {
+     :root {
+        --color-primary: #569CD6;
+        --color-primary-shade: #9CDCFE;
+        --color-secondary: #F48771;
+        --color-tertiary: #4EC9B0;
+        --color-dark: #D4D4D4;
+        --color-light: #7E7E7E;
+        --color-background: #1E1E1E;
+    }
+}
+
+* {
+    transition: transform 2s, opacity .5s;
+}
+
+svg {
+    background-color: var(--color-background);
+}
+
+#view-root text {
+    text-anchor: middle;
+    font-size: calc(var(--text-scaling) * 1em);
+    font-family: sans-serif;
+    fill: var(--color-background);
+}
+
+.btn {
+    fill: var(--color-dark);
+    stroke: var(--color-primary);
+    stroke-width: 2;
+}
+
+.file:hover text {
+    opacity: 1;
+}
+
+.folder>circle {
+    fill: none;
+    stroke-width: var(--text-scaling);
+}
+
+.folder>text {
+    transform: translateY(calc(-5 * var(--text-scaling)));
+}

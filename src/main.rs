@@ -9,17 +9,13 @@ use svg::node::element::*;
 use svg::Document;
 
 fn main() {
-    let mut s = String::new();
-    print!(">");
-    let _ = stdout().flush();
-    stdin().read_line(&mut s).expect("Incorrect input");
-    s = s.trim().to_string();
     let structure = get_structure(Path::new("../git-cuttle"), &[".vscode", "target", ".git"]);
     println!("{:?}", structure);
     if let Some(item) = structure {
         plot(item, "plot.svg");
     }
 
+    let mut s = String::new();
     print!(">");
     let _ = stdout().flush();
     stdin().read_line(&mut s).expect("Incorrect input");
@@ -33,15 +29,47 @@ fn main() {
 
 fn plot(item: Item, path: &str) {
     let size = 1024.0;
-    let margin = 10.0;
+    let margin = 20.0;
     let root = Document::new()
         .set("viewBox", (-margin, -margin, size + margin, size + margin))
-        .add(plot_item(
-            &item,
-            Area::new(0.0, 0.0, size, size),
-            item.size(),
+        .set("xmlns:xlink", "http://www.w3.org/1999/xlink")
+        .set("onload", "load()")
+        .add(Style::new(std::include_str!("style.css")))
+        .add(Script::new(std::include_str!("script.js")).set("type", "text/javascript"))
+        .add(plot_item(&item, Area::new(0.0, 0.0, size, size), item.size()).set("id", "view-root"))
+        .add(make_button(
+            "Toggle file text",
+            "toggle-file-text-button",
+            Point(10.0, 10.0),
+            "toggle_file_text_button()",
+        ))
+        .add(make_button(
+            "Reset view",
+            "reset-view-button",
+            Point(10.0, 50.0),
+            "reset_view_button()",
         ));
     svg::save(path, &root).unwrap();
+}
+
+fn make_button(text: &str, id: &str, pos: Point, call_back: &str) -> Group {
+    Group::new()
+        .add(
+            Rectangle::new()
+                .set("x", pos.0)
+                .set("y", pos.1)
+                .set("width", 120)
+                .set("height", 30),
+        )
+        .add(
+            Text::new()
+                .set("x", pos.0 + 5.0)
+                .set("y", pos.1 + 20.0)
+                .add(svg::node::Text::new(text)),
+        )
+        .set("class", "btn")
+        .set("id", id)
+        .set("onclick", call_back)
 }
 
 fn get_radius(size: f64, total: f64) -> f64 {
@@ -60,12 +88,9 @@ fn plot_item(item: &Item, area: Area, total: f64) -> Group {
             let text = Text::new()
                 .set("x", x)
                 .set("y", y)
-                .set("text-anchor", "middle")
-                .set("font-family", "sans-serif")
-                .set("font-size", "1em")
-                .set("fill", "black")
+                .set("opacity", "var(--file-text-opacity)")
                 .add(svg::node::Text::new(name));
-            Group::new().add(circle).add(text)
+            Group::new().add(circle).add(text).set("class", "file")
         }
         Item::Folder { name, items } => {
             let Point(x, y) = area.center();
@@ -74,17 +99,20 @@ fn plot_item(item: &Item, area: Area, total: f64) -> Group {
                 .set("cx", x)
                 .set("cy", y)
                 .set("r", radius)
-                .set("fill", "none")
                 .set("stroke", item.colour());
             let text = Text::new()
                 .set("x", x)
                 .set("y", y - radius)
-                .set("text-anchor", "middle")
-                .set("font-family", "sans-serif")
-                .set("font-size", "1em")
-                .set("fill", "black")
+                .set("opacity", "var(--folder-text-opacity)")
                 .add(svg::node::Text::new(name));
-            let mut group = Group::new().add(circle).add(text);
+            let (transform, text_scale) = get_transform(&area);
+            let mut group = Group::new()
+                .add(circle)
+                .add(text)
+                .set("class", "folder")
+                .set("data-transform", transform)
+                .set("data-text-scale", text_scale);
+            //.set("onclick", "folder_click");
 
             let base = (items.len() as f64).sqrt().ceil() as usize;
             let positions: Vec<_> = area
@@ -123,7 +151,7 @@ fn improve_positions<'a>(
         })
         .collect();
     //println!("Gravitate towards: {:?}", center);
-    for _ in 0..1000 {
+    for _ in 0..100 {
         let mut vec = (0..items.len()).collect::<Vec<_>>();
         vec.shuffle(&mut thread_rng());
         for index in vec {
@@ -217,6 +245,20 @@ fn improve_positions<'a>(
         .collect()
 }
 
+fn get_transform(area: &Area) -> (String, String) {
+    let size = (area.end_x - area.start_x).min(area.end_y - area.start_y) * 1.5;
+    let scale = 1024.0 / size;
+    let transform_x = area.start_x + (area.end_x - area.start_x) / 2.0 - size / 2.0;
+    let transform_y = area.start_y + (area.end_y - area.start_y) / 2.0 - size / 2.0;
+    (
+        format!(
+            "scale({}) translate(-{}px, -{}px)",
+            scale, transform_x, transform_y
+        ),
+        (1.0 / scale).to_string(),
+    )
+}
+
 fn get_structure(path: &Path, ignore: &[&str]) -> Option<Item> {
     if path.is_dir()
         && !ignore
@@ -252,7 +294,7 @@ fn find_class(path: &Path) -> FileType {
     path.extension().map_or(FileType::Unknown, |n| {
         n.to_str().map_or(FileType::Unknown, |t| match t {
             "rs" | "cs" | "js" | "ts" | "r" | "cpp" | "py" => FileType::Code,
-            "csv" | "tsv" | "xslx" | "xls" | "fasta" => FileType::Data,
+            "csv" | "tsv" | "xlsx" | "xls" | "fasta" => FileType::Data,
             "yaml" | "toml" | "lock" => FileType::Configuration,
             _ => FileType::Unknown,
         })
@@ -287,7 +329,7 @@ impl Item {
             Item::Folder { items, .. } => {
                 let sum = items.iter().fold(0.0, |acc, item| acc + item.size());
                 let len = items.len() as f64;
-                40.0_f64.powf(len * 1.15) * sum * (sum / len)
+                25.0_f64.powf(len * 1.10) * sum * (sum / len)
             }
         }
     }
@@ -295,12 +337,12 @@ impl Item {
     pub fn colour(&self) -> &str {
         match self {
             Item::File { class, .. } => match class {
-                FileType::Code => "rgb(197, 134, 161)",          //purple
-                FileType::Data => "rgb(78, 201, 176)",           // green
-                FileType::Configuration => "rgb(220, 208, 143)", // yellow
-                FileType::Unknown => "rgb(86, 154, 214)",        // blue
+                FileType::Code => "var(--color-primary)",       //purple
+                FileType::Data => "var(--color-primary-shade)", // green
+                FileType::Configuration => "var(--color-secondary)", // yellow
+                FileType::Unknown => "var(--color-tertiary)",   // blue
             },
-            Item::Folder { .. } => "rgb(126, 126, 126)", // grey
+            Item::Folder { .. } => "var(--color-light)", // grey
         }
     }
 }
