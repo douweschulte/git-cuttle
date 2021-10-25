@@ -1,10 +1,12 @@
+#![allow(dead_code)]
+
+use rand::seq::SliceRandom;
+use rand::thread_rng;
 use std::fs;
 use std::io::{stdin, stdout, Write};
 use std::path::Path;
 use svg::node::element::*;
 use svg::Document;
-
-const FACTOR: f64 = 500.0;
 
 fn main() {
     let mut s = String::new();
@@ -20,24 +22,30 @@ fn main() {
 }
 
 fn plot(item: Item, path: &str) {
+    let size = 1024.0;
+    let margin = 10.0;
     let root = Document::new()
-        .set("viewBox", (0, 0, 1024, 1024))
+        .set("viewBox", (-margin, -margin, size + margin, size + margin))
         .add(plot_item(
             &item,
-            Area::new(0.0, 0.0, 1024.0, 1024.0),
+            Area::new(0.0, 0.0, size, size),
             item.size(),
         ));
     svg::save(path, &root).unwrap();
 }
 
+fn get_radius(size: f64, total: f64) -> f64 {
+    (size.log2() / total.log2()) * 1024.0 * 0.5
+}
+
 fn plot_item(item: &Item, area: Area, total: f64) -> Group {
     match item {
         Item::File { name, .. } => {
-            let (x, y) = area.center();
+            let Point(x, y) = area.center();
             let circle = Circle::new()
                 .set("cx", x)
                 .set("cy", y)
-                .set("r", item.size() / total * FACTOR)
+                .set("r", get_radius(item.size(), total))
                 .set("fill", item.colour());
             let text = Text::new()
                 .set("x", x)
@@ -50,16 +58,17 @@ fn plot_item(item: &Item, area: Area, total: f64) -> Group {
             Group::new().add(circle).add(text)
         }
         Item::Folder { name, items } => {
-            let (x, y) = area.center();
+            let Point(x, y) = area.center();
+            let radius = get_radius(item.size(), total);
             let circle = Circle::new()
                 .set("cx", x)
                 .set("cy", y)
-                .set("r", item.size() / total * FACTOR)
+                .set("r", radius)
                 .set("fill", "none")
                 .set("stroke", item.colour());
             let text = Text::new()
                 .set("x", x)
-                .set("y", y - (item.size() / total * FACTOR))
+                .set("y", y - radius)
                 .set("text-anchor", "middle")
                 .set("font-family", "sans-serif")
                 .set("font-size", "1em")
@@ -67,27 +76,86 @@ fn plot_item(item: &Item, area: Area, total: f64) -> Group {
                 .add(svg::node::Text::new(name));
             let mut group = Group::new().add(circle).add(text);
 
-            let length = items.len();
-            match length {
-                0 => group,
-                1 => group.add(plot_item(&items[0], area.shrink(0.1), total)),
-                2 => {
-                    let ratio = items[0].size() / (items[0].size() + items[1].size());
-                    let chunks = area.split_horizontally(ratio);
-                    group
-                        .add(plot_item(&items[0], chunks.0, total))
-                        .add(plot_item(&items[1], chunks.1, total))
-                }
-                n => {
-                    let base = (n as f64).sqrt().ceil() as usize;
-                    for (chunk, item) in area.split_evenly((base, base)).into_iter().zip(items) {
-                        group = group.add(plot_item(item, chunk, total));
-                    }
-                    group
-                }
+            let base = (items.len() as f64).sqrt().ceil() as usize;
+            let positions: Vec<_> = area
+                .split_evenly((base, base))
+                .into_iter()
+                .zip(items)
+                .map(|(a, i)| (a, get_radius(i.size(), total), i))
+                .collect();
+            for (chunk, item) in improve_positions(positions, area) {
+                group = group.add(plot_item(item, chunk, total));
             }
+            group
         }
     }
+}
+
+fn improve_positions<'a>(
+    positions: Vec<(Area, f64, &'a Item)>,
+    bounds: Area,
+) -> Vec<(Area, &'a Item)> {
+    let center = bounds.center();
+    let mut items: Vec<_> = positions
+        .iter()
+        .map(|(a, s, i)| (a.center(), s, Point(0.0, 0.0), i))
+        .collect();
+    //println!("Gravitate towards: {:?}", center);
+    for _ in 0..100 {
+        let mut vec = (0..items.len()).collect::<Vec<_>>();
+        vec.shuffle(&mut thread_rng());
+        for index in vec {
+            let mut item = items[index];
+            // update speed
+            item.2 = (center - item.0).normalize() * 10.0 + item.2;
+            //println!(
+            //    "Item {} updated from {:?} with speed {:?}",
+            //    index, item.0, item.2
+            //);
+            // update position
+            item.0 = item.0 + item.2;
+            // handle collisions
+            for other_index in (0..items.len()).filter(|i| *i != index) {
+                let other = items[other_index];
+                let min_dis = item.1 + other.1 + 5.0;
+                if item.0.distance(other.0) < min_dis {
+                    // 'Bounce' away from the other ball, could maybe break on multiple collisions in a single frame
+                    item.2 = (item.0 - other.0).normalize() - other.2 * 0.75;
+                    items[other_index].2 = (other.0 - item.0).normalize() - item.2 * 0.75; // Push the other item a bit
+                    for _ in 0..100 {
+                        item.0 = item.0 + item.2 * 0.1;
+                        if item.0.distance(other.0) >= min_dis {
+                            break;
+                        }
+                    }
+                }
+            }
+            if item.0 .0 < bounds.start_x && item.2 .0 < 0.0
+                || item.0 .0 > bounds.end_x && item.2 .0 > 0.0
+            {
+                item.2 .0 *= -0.75;
+            }
+            if item.0 .1 < bounds.start_y && item.2 .1 < 0.0
+                || item.0 .1 > bounds.end_y && item.2 .1 > 0.0
+            {
+                item.2 .1 *= -0.75;
+            }
+            //println!(
+            //    "\tto: {:?} with speed {:?} collision {}",
+            //    item.0, item.2, collision
+            //);
+            items[index] = item;
+        }
+    }
+    items
+        .iter()
+        .map(|(Point(x, y), s, _, i)| {
+            (
+                Area::new(x - **s / 2.0, y - **s / 2.0, x + **s / 2.0, y + **s / 2.0),
+                **i,
+            )
+        })
+        .collect()
 }
 
 fn get_structure(path: &Path, ignore: &[&str]) -> Option<Item> {
@@ -97,7 +165,7 @@ fn get_structure(path: &Path, ignore: &[&str]) -> Option<Item> {
             .any(|d| Some(*d) == path.file_name().map(|s| s.to_str()).flatten())
     {
         Some(Item::Folder {
-            name: path.to_str()?.to_string(),
+            name: path.file_name().map(|s| s.to_str()).flatten()?.to_string(),
             items: fs::read_dir(path).map_or(vec![], |r| {
                 r.filter_map(|p| p.ok())
                     .map(|p| get_structure(&p.path(), ignore))
@@ -155,16 +223,11 @@ enum FileType {
 
 impl Item {
     pub fn size(&self) -> f64 {
-        self.get_size(1.0)
-    }
-
-    fn get_size(&self, level: f64) -> f64 {
         match self {
-            Item::File { size: s, .. } => (*s as f64).log2(),
+            Item::File { size, .. } => *size as f64,
             Item::Folder { items, .. } => {
-                1.1 * items
-                    .iter()
-                    .fold(0.0, |acc, item| acc + item.get_size(level + 1.0))
+                25.0_f64.powi(items.len() as i32)
+                    * items.iter().fold(0.0, |acc, item| acc + item.size())
             }
         }
     }
@@ -198,8 +261,8 @@ impl Area {
             end_y,
         }
     }
-    pub fn center(&self) -> (f64, f64) {
-        (
+    pub fn center(&self) -> Point {
+        Point(
             (self.end_x - self.start_x) / 2.0 + self.start_x,
             (self.end_y - self.start_y) / 2.0 + self.start_y,
         )
@@ -265,5 +328,47 @@ impl Area {
             }
         }
         output
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Point(f64, f64);
+
+impl std::ops::Sub for Point {
+    type Output = Self;
+
+    fn sub(self, other: Self) -> Self::Output {
+        Self(self.0 - other.0, self.1 - other.1)
+    }
+}
+
+impl std::ops::Add for Point {
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self::Output {
+        Self(self.0 + other.0, self.1 + other.1)
+    }
+}
+
+impl std::ops::Mul<f64> for Point {
+    type Output = Self;
+
+    fn mul(self, other: f64) -> Self::Output {
+        Self(self.0 * other, self.1 * other)
+    }
+}
+
+impl Point {
+    pub fn normalize(&self) -> Self {
+        let sum = self.0.abs() + self.1.abs();
+        if sum == 0.0 {
+            Point(0.0, 0.0)
+        } else {
+            Point(self.0 / sum, self.1 / sum)
+        }
+    }
+
+    pub fn distance(&self, other: Self) -> f64 {
+        ((self.0 - other.0).powi(2) + (self.1 - other.1).powi(2)).sqrt()
     }
 }
