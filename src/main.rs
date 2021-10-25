@@ -1,9 +1,9 @@
-use plotters::prelude::*;
 use std::fs;
 use std::io::{stdin, stdout, Write};
 use std::path::Path;
+use svg::node::element::*;
+use svg::Document;
 
-const MARGIN: f64 = 0.3;
 const FACTOR: f64 = 500.0;
 
 fn main() {
@@ -20,86 +20,70 @@ fn main() {
 }
 
 fn plot(item: Item, path: &str) {
-    let root = SVGBackend::new(path, (1024, 1024)).into_drawing_area();
-
-    let total = item.size();
-    plot_item(&item, &root, total)
+    let root = Document::new()
+        .set("viewBox", (0, 0, 1024, 1024))
+        .add(plot_item(
+            &item,
+            Area::new(0.0, 0.0, 1024.0, 1024.0),
+            item.size(),
+        ));
+    svg::save(path, &root).unwrap();
 }
 
-fn plot_item(item: &Item, area: &DrawingArea<SVGBackend, plotters::coord::Shift>, total: f64) {
+fn plot_item(item: &Item, area: Area, total: f64) -> Group {
     match item {
         Item::File { name, .. } => {
-            let range = area.get_pixel_range();
-            println!("file {:?}", range);
-            let x = (range.0.end - range.0.start) / 2 + range.0.start;
-            let y = (range.1.end - range.1.start) / 2 + range.1.start;
-            area.draw(&Circle::new(
-                (x, y),
-                item.size() / total * FACTOR,
-                Into::<ShapeStyle>::into(item.colour()).filled(),
-            ))
-            .expect("Drawing of circle not working");
-            area.draw(&Text::new(
-                name.to_string(),
-                (x, y),
-                &"sans-serif".into_font().resize(20.0).color(&BLACK),
-            ))
-            .expect("Drawing of text not working");
-            area.draw(&Rectangle::new(
-                [(range.0.start, range.1.start), (range.0.end, range.1.end)],
-                Into::<ShapeStyle>::into(item.colour()).stroke_width(2),
-            ))
-            .expect("Drawing of rect not working");
-            println!(
-                "rect {:?}",
-                [(range.0.start, range.1.start), (range.0.end, range.1.end)]
-            );
+            let (x, y) = area.center();
+            let circle = Circle::new()
+                .set("cx", x)
+                .set("cy", y)
+                .set("r", item.size() / total * FACTOR)
+                .set("fill", item.colour());
+            let text = Text::new()
+                .set("x", x)
+                .set("y", y)
+                .set("text-anchor", "middle")
+                .set("font-family", "sans-serif")
+                .set("font-size", "1em")
+                .set("fill", "black")
+                .add(svg::node::Text::new(name));
+            Group::new().add(circle).add(text)
         }
         Item::Folder { name, items } => {
-            // 3 items with 1000, 200, 500 size -> 10, 2, 5
-            let range = area.get_pixel_range();
-            let x = (range.0.end - range.0.start) / 2 + range.0.start;
-            let y = (range.1.end - range.1.start) / 2 + range.1.start;
-            let max_radius = (range.0.end - range.0.start).min(range.1.end - range.1.start);
-
-            area.draw(&Circle::new(
-                (x, y),
-                max_radius,
-                Into::<ShapeStyle>::into(item.colour()).stroke_width(2),
-            ))
-            .expect("Drawing of circle not working");
-            area.draw(&Text::new(
-                name.to_string(),
-                (x, range.1.start),
-                &"sans-serif".into_font().resize(20.0).color(&BLACK),
-            ))
-            .expect("Drawing of text not working");
-            area.draw(&Rectangle::new(
-                [(range.0.start, range.1.start), (range.0.end, range.1.end)],
-                Into::<ShapeStyle>::into(item.colour()).stroke_width(2),
-            ))
-            .expect("Drawing of rect not working");
+            let (x, y) = area.center();
+            let circle = Circle::new()
+                .set("cx", x)
+                .set("cy", y)
+                .set("r", item.size() / total * FACTOR)
+                .set("fill", "none")
+                .set("stroke", item.colour());
+            let text = Text::new()
+                .set("x", x)
+                .set("y", y - (item.size() / total * FACTOR))
+                .set("text-anchor", "middle")
+                .set("font-family", "sans-serif")
+                .set("font-size", "1em")
+                .set("fill", "black")
+                .add(svg::node::Text::new(name));
+            let mut group = Group::new().add(circle).add(text);
 
             let length = items.len();
             match length {
-                0 => {}
-                1 => plot_item(
-                    &items[0],
-                    &area.margin(MARGIN, MARGIN, MARGIN, MARGIN),
-                    total,
-                ),
+                0 => group,
+                1 => group.add(plot_item(&items[0], area.shrink(0.1), total)),
                 2 => {
                     let ratio = items[0].size() / (items[0].size() + items[1].size());
                     let chunks = area.split_horizontally(ratio);
-                    plot_item(&items[0], &chunks.0, total);
-                    plot_item(&items[1], &chunks.1, total);
+                    group
+                        .add(plot_item(&items[0], chunks.0, total))
+                        .add(plot_item(&items[1], chunks.1, total))
                 }
                 n => {
                     let base = (n as f64).sqrt().ceil() as usize;
-                    for (chunk, item) in area.split_evenly((base, base)).iter().zip(items) {
-                        println!("chunk {:?}", chunk.get_pixel_range());
-                        plot_item(item, chunk, total);
+                    for (chunk, item) in area.split_evenly((base, base)).into_iter().zip(items) {
+                        group = group.add(plot_item(item, chunk, total));
                     }
+                    group
                 }
             }
         }
@@ -123,7 +107,7 @@ fn get_structure(path: &Path, ignore: &[&str]) -> Option<Item> {
         })
     } else if path.is_file() {
         if let Ok(meta) = path.metadata() {
-            let name = path.to_str()?.to_string();
+            let name = path.file_name().map(|s| s.to_str()).flatten()?.to_string();
             Some(Item::File {
                 name,
                 size: meta.len(),
@@ -176,22 +160,110 @@ impl Item {
 
     fn get_size(&self, level: f64) -> f64 {
         match self {
-            Item::File { size: s, .. } => (level * MARGIN + 1.0) * (*s as f64).log2(),
-            Item::Folder { items: i, .. } => i
-                .iter()
-                .fold(0.0, |acc, item| acc + item.get_size(level + 1.0)),
+            Item::File { size: s, .. } => (*s as f64).log2(),
+            Item::Folder { items, .. } => {
+                1.1 * items
+                    .iter()
+                    .fold(0.0, |acc, item| acc + item.get_size(level + 1.0))
+            }
         }
     }
 
-    pub fn colour(&self) -> RGBColor {
+    pub fn colour(&self) -> &str {
         match self {
             Item::File { class, .. } => match class {
-                FileType::Code => RGBColor(197, 134, 161), //purple
-                FileType::Data => RGBColor(78, 201, 176),  // green
-                FileType::Configuration => RGBColor(220, 208, 143), // yellow
-                FileType::Unknown => RGBColor(86, 154, 214), // blue
+                FileType::Code => "rgb(197, 134, 161)",          //purple
+                FileType::Data => "rgb(78, 201, 176)",           // green
+                FileType::Configuration => "rgb(220, 208, 143)", // yellow
+                FileType::Unknown => "rgb(86, 154, 214)",        // blue
             },
-            Item::Folder { .. } => RGBColor(126, 126, 126), // grey
+            Item::Folder { .. } => "rgb(126, 126, 126)", // grey
         }
+    }
+}
+
+struct Area {
+    start_x: f64,
+    start_y: f64,
+    end_x: f64,
+    end_y: f64,
+}
+
+impl Area {
+    pub fn new(start_x: f64, start_y: f64, end_x: f64, end_y: f64) -> Self {
+        Area {
+            start_x,
+            start_y,
+            end_x,
+            end_y,
+        }
+    }
+    pub fn center(&self) -> (f64, f64) {
+        (
+            (self.end_x - self.start_x) / 2.0 + self.start_x,
+            (self.end_y - self.start_y) / 2.0 + self.start_y,
+        )
+    }
+    pub fn shrink(&self, factor: f64) -> Self {
+        let dx = self.end_x - self.start_x;
+        let dy = self.end_y - self.start_y;
+        Area {
+            start_x: self.start_x + dx * factor,
+            end_x: self.end_x - dx * factor,
+            start_y: self.start_y + dy * factor,
+            end_y: self.end_y - dy * factor,
+        }
+    }
+    /// Split the area at the given point (in fractions: 0.5 is halfway)
+    pub fn split_horizontally(&self, point: f64) -> (Self, Self) {
+        let dx = self.end_x - self.start_x;
+        (
+            Area {
+                start_x: self.start_x,
+                end_x: self.start_x + dx * point,
+                start_y: self.start_y,
+                end_y: self.end_y,
+            },
+            Area {
+                start_x: self.start_x + dx * point,
+                end_x: self.end_x,
+                start_y: self.start_y,
+                end_y: self.end_y,
+            },
+        )
+    }
+    /// Split the area at the given point (in fractions: 0.5 is halfway)
+    pub fn split_vertically(&self, point: f64) -> (Self, Self) {
+        let dy = self.end_y - self.start_y;
+        (
+            Area {
+                start_x: self.start_x,
+                end_x: self.end_x,
+                start_y: self.start_y,
+                end_y: self.start_y + dy * point,
+            },
+            Area {
+                start_x: self.start_x,
+                end_x: self.end_x,
+                start_y: self.start_y + dy * point,
+                end_y: self.end_y,
+            },
+        )
+    }
+    pub fn split_evenly(&self, size: (usize, usize)) -> Vec<Self> {
+        let step_x = (self.end_x - self.start_x) / (size.0 as f64);
+        let step_y = (self.end_y - self.start_y) / (size.1 as f64);
+        let mut output = Vec::with_capacity(size.0 * size.1);
+        for x in 0..size.0 {
+            for y in 0..size.1 {
+                output.push(Area {
+                    start_x: self.start_x + step_x * (x as f64),
+                    end_x: self.start_x + step_x * ((x + 1) as f64),
+                    start_y: self.start_y + step_y * (y as f64),
+                    end_y: self.start_y + step_y * ((y + 1) as f64),
+                })
+            }
+        }
+        output
     }
 }
