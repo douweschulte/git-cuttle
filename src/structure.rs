@@ -20,39 +20,51 @@ pub fn get_structure(path: &Path, ignore: &[&str]) -> Option<Item> {
         })
     } else if path.is_file() {
         if let Ok(meta) = path.metadata() {
-            let patterns = Regex::new(
-                r"(?:use crate::([^;]*?)(?:::\*)?(?:::\{[^;]\})?;)|(?:include_str!\(([^\)]*)\))|(?:mod ([^;]*);)",
-            )
-            .unwrap();
-            let mut s = String::new();
-            let _ = fs::File::open(path).ok()?.read_to_string(&mut s).ok()?;
             //let matches = patterns.find_iter(&s);
             let name = path.file_name().map(|s| s.to_str()).flatten()?.to_string();
             Some(Item::File {
                 name,
                 full_name: path.to_str()?.to_string(),
-                size: meta.len(),
+                size: if meta.len() == 0 { 1 } else { meta.len() },
                 class: find_class(path),
-                refs: patterns
-                    .captures_iter(&s)
-                    .filter_map(|c| {
-                        if let Some(r) = c.get(1) {
-                            Some(r.as_str().replace("::", "/") + ".rs")
-                        } else if let Some(r) = c.get(2) {
-                            Some(r.as_str().replace('"', ""))
-                        } else if let Some(r) = c.get(3) {
-                            Some(r.as_str().to_string() + ".rs")
-                        } else {
-                            None
-                        }
-                    })
-                    .collect(),
+                refs: find_refs(path),
             })
         } else {
             None
         }
     } else {
         None
+    }
+}
+
+fn find_refs(path: &Path) -> Vec<String> {
+    if matches!(path.extension().map(|s| s.to_str()).flatten(), Some("rs")) {
+        let mut s = String::new();
+        let _ = fs::File::open(path)
+            .unwrap()
+            .read_to_string(&mut s)
+            .unwrap();
+        let patterns = Regex::new(
+            r"(?:use crate::([^;]*?)(?:::\*)?(?:::\{[^;]\})?;)|(?:use super::([^;]*?)(?:::\*)?(?:::\{[^;]\})?;)|(?:include_str!\(([^\)]*)\))|(?:mod ([^;{}]*);)",
+        ).unwrap();
+        patterns
+            .captures_iter(&s)
+            .filter_map(|c| {
+                if let Some(r) = c.get(1) {
+                    Some(r.as_str().replace("::", "/") + ".rs")
+                } else if let Some(r) = c.get(2) {
+                    Some(r.as_str().replace("::", "/") + ".rs")
+                } else if let Some(r) = c.get(3) {
+                    Some(r.as_str().replace('"', ""))
+                } else if let Some(r) = c.get(4) {
+                    Some(r.as_str().to_string() + ".rs")
+                } else {
+                    None
+                }
+            })
+            .collect()
+    } else {
+        vec![]
     }
 }
 
@@ -102,6 +114,13 @@ impl Item {
         }
     }
 
+    pub fn files(&self) -> i32 {
+        match self {
+            Item::File { .. } => 1,
+            Item::Folder { items, .. } => items.iter().fold(0, |acc, item| acc + item.files()),
+        }
+    }
+
     pub fn colour(&self) -> &str {
         match self {
             Item::File { class, .. } => match class {
@@ -111,6 +130,13 @@ impl Item {
                 FileType::Unknown => "var(--color-tertiary)",   // blue
             },
             Item::Folder { .. } => "var(--color-light)", // grey
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        match self {
+            Item::File { name, .. } => name,
+            Item::Folder { name, .. } => name,
         }
     }
 }

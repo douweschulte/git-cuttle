@@ -9,13 +9,24 @@ use svg::Document;
 pub fn plot(item: Item, path: &str) {
     let size = 1024.0;
     let margin = 20.0;
+
+    let mut entities = plot_item(
+        &item,
+        Area::new(0.0, 0.0, size, size),
+        (item.files(), item.size()),
+    );
+    improve_positions(&mut entities);
+    entities = shrink_folder_sizes(entities);
+    improve_positions(&mut entities);
+    let plot = plot_entities(entities, Group::new().set("id", "view-root"));
+
     let root = Document::new()
         .set("viewBox", (-margin, -margin, size + margin, size + margin))
         .set("xmlns:xlink", "http://www.w3.org/1999/xlink")
         .set("onload", "load()")
         .add(Style::new(std::include_str!("style.css")))
         .add(Script::new(std::include_str!("script.js")).set("type", "text/javascript"))
-        .add(plot_item(&item, Area::new(0.0, 0.0, size, size), item.size()).set("id", "view-root"))
+        .add(plot)
         .add(make_button(
             "Toggle file text",
             "toggle-file-text-button",
@@ -51,41 +62,37 @@ fn make_button(text: &str, id: &str, pos: Point, call_back: &str) -> Group {
         .set("onclick", call_back)
 }
 
-fn get_radius(size: f64, total: f64) -> f64 {
-    (size.log2() / total.log2()) * 1024.0 * 0.5
+fn get_radius(size: f64, total: (i32, f64)) -> f64 {
+    (size.log2() / total.1.log2()) * 1024.0 * 0.5 * 1.0005_f64.powi(total.0)
 }
 
-fn plot_item(item: &Item, area: Area, total: f64) -> Group {
-    match item {
-        Item::File { name, .. } => {
-            let Point(x, y) = area.center();
+fn plot_entities(entity: EntityNode, group: Group) -> Group {
+    match entity {
+        EntityNode::File(entity, item) => {
             let circle = Circle::new()
-                .set("cx", x)
-                .set("cy", y)
-                .set("r", get_radius(item.size(), total))
+                .set("cx", entity.pos.0)
+                .set("cy", entity.pos.1)
+                .set("r", entity.radius)
                 .set("fill", item.colour());
             let text = Text::new()
-                .set("x", x)
-                .set("y", y)
+                .set("x", entity.pos.0)
+                .set("y", entity.pos.1)
                 .set("opacity", "var(--file-text-opacity)")
-                .add(svg::node::Text::new(name));
-            Group::new().add(circle).add(text).set("class", "file")
+                .add(svg::node::Text::new(item.name()));
+            group.add(Group::new().add(circle).add(text).set("class", "file"))
         }
-        Item::Folder { name, items } => {
-            let Point(x, y) = area.center();
-            let radius = get_radius(item.size(), total);
+        EntityNode::Folder(entity, name, items) => {
             let circle = Circle::new()
-                .set("cx", x)
-                .set("cy", y)
-                .set("r", radius)
-                .set("stroke", item.colour());
+                .set("cx", entity.pos.0)
+                .set("cy", entity.pos.1)
+                .set("r", entity.radius);
             let text = Text::new()
-                .set("x", x)
-                .set("y", y - radius)
+                .set("x", entity.pos.0)
+                .set("y", entity.pos.1 - entity.radius)
                 .set("opacity", "var(--folder-text-opacity)")
                 .add(svg::node::Text::new(name));
-            let (transform, text_scale) = get_transform(&area);
-            let mut group = Group::new()
+            let (transform, text_scale) = get_transform(&entity);
+            let mut folder_group = Group::new()
                 .add(circle)
                 .add(text)
                 .set("class", "folder")
@@ -93,48 +100,117 @@ fn plot_item(item: &Item, area: Area, total: f64) -> Group {
                 .set("data-text-scale", text_scale);
             //.set("onclick", "folder_click");
 
-            let base = (items.len() as f64).sqrt().ceil() as usize;
-            let positions: Vec<_> = area
-                .split_evenly((base, base))
-                .into_iter()
-                .zip(items)
-                .map(|(a, i)| (a, get_radius(i.size(), total), i))
-                .collect();
-            for (chunk, item) in improve_positions(positions, area) {
-                group = group.add(plot_item(item, chunk, total));
+            for item in items {
+                folder_group = plot_entities(item, folder_group);
             }
-            group
+
+            group.add(folder_group)
         }
     }
 }
 
-fn improve_positions<'a>(
-    positions: Vec<(Area, f64, &'a Item)>,
-    bounds: Area,
-) -> Vec<(Area, &'a Item)> {
-    #[derive(Debug, Clone, Copy)]
-    struct Entity<'a> {
-        pos: Point,
-        size: f64,
-        speed: Point,
-        item: &'a Item,
+#[derive(Debug, Clone, Copy)]
+struct Entity {
+    pos: Point,
+    radius: f64,
+    speed: Point,
+}
+
+impl Entity {
+    pub fn bounding_box(&self) -> Area {
+        Area {
+            start_x: self.pos.0 - self.radius,
+            start_y: self.pos.1 - self.radius,
+            end_x: self.pos.0 + self.radius,
+            end_y: self.pos.1 + self.radius,
+        }
     }
-    let center = bounds.center();
-    let mut items: Vec<_> = positions
-        .iter()
-        .map(|(a, s, i)| Entity {
-            pos: a.center(),
-            size: *s,
+    pub fn from_bounding_box(area: Area) -> Self {
+        Entity {
+            pos: area.center(),
+            radius: (area.end_x - area.start_x).max(area.end_y - area.start_y) / 2.0,
             speed: Point(0.0, 0.0),
-            item: i,
-        })
-        .collect();
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum EntityNode<'a> {
+    File(Entity, &'a Item),
+    Folder(Entity, String, Vec<EntityNode<'a>>),
+}
+
+impl<'a> EntityNode<'a> {
+    pub fn entity(&self) -> &Entity {
+        match self {
+            EntityNode::File(e, _) => e,
+            EntityNode::Folder(e, _, _) => e,
+        }
+    }
+    pub fn entity_mut(&mut self) -> &mut Entity {
+        match self {
+            EntityNode::File(e, _) => e,
+            EntityNode::Folder(e, _, _) => e,
+        }
+    }
+    pub fn set_entity(self, entity: Entity) -> Self {
+        match self {
+            EntityNode::File(_, i) => EntityNode::File(entity, i),
+            EntityNode::Folder(_, n, i) => EntityNode::Folder(entity, n, i),
+        }
+    }
+}
+
+fn plot_item(item: &Item, area: Area, total: (i32, f64)) -> EntityNode {
+    match item {
+        Item::File { .. } => EntityNode::File(
+            Entity {
+                pos: area.center(),
+                radius: get_radius(item.size(), total),
+                speed: Point(0.0, 0.0),
+            },
+            item,
+        ),
+        Item::Folder { name, items } => {
+            let base = (items.len() as f64).sqrt().ceil() as usize;
+            EntityNode::Folder(
+                Entity {
+                    pos: area.center(),
+                    radius: get_radius(item.size(), total),
+                    speed: Point(0.0, 0.0),
+                },
+                name.to_string(),
+                items
+                    .iter()
+                    .zip(area.split_evenly((base, base)))
+                    .map(|(i, a)| plot_item(i, a, total))
+                    .collect(),
+            )
+        }
+    }
+}
+
+fn improve_positions(entity: &mut EntityNode) {
+    match entity {
+        EntityNode::Folder(folder_entity, _, items) => {
+            improve_folder_positions(folder_entity, items);
+            for item in items {
+                improve_positions(item)
+            }
+        }
+        _ => (),
+    }
+}
+
+fn improve_folder_positions(entity: &mut Entity, items: &mut Vec<EntityNode>) {
+    let bounds = entity.bounding_box();
+    let center = bounds.center();
     //println!("Gravitate towards: {:?}", center);
     for _ in 0..100 {
         let mut vec = (0..items.len()).collect::<Vec<_>>();
         vec.shuffle(&mut thread_rng());
         for index in vec {
-            let mut item = items[index];
+            let mut item = items[index].entity().clone();
             // update speed
             item.speed = (center - item.pos).normalize() * 0.5 + item.speed;
             //println!(
@@ -145,8 +221,8 @@ fn improve_positions<'a>(
             item.pos = item.pos + item.speed;
             // handle collisions
             for other_index in (0..items.len()).filter(|i| *i != index) {
-                let other = &items[other_index];
-                let min_dis = item.size + other.size + 5.0;
+                let other = items[other_index].entity();
+                let min_dis = item.radius + other.radius + 5.0;
                 if item.pos.distance(other.pos) < min_dis {
                     // 'Bounce' away from the other ball, could maybe break on multiple collisions in a single frame
                     item.speed = (item.pos - other.pos).normalize() - other.speed * 0.75;
@@ -160,73 +236,81 @@ fn improve_positions<'a>(
                     }
                 }
             }
-            if item.pos.0 < bounds.start_x && item.speed.0 < 0.0
-                || item.pos.0 > bounds.end_x && item.speed.0 > 0.0
-            {
-                item.speed.0 *= -0.75;
+            if item.pos.0 < bounds.start_x && item.speed.0 < 0.0 {
+                item.speed.0 += 0.5;
+            } else if item.pos.0 > bounds.end_x && item.speed.0 > 0.0 {
+                item.speed.0 -= 0.5;
             }
-            if item.pos.1 < bounds.start_y && item.speed.1 < 0.0
-                || item.pos.1 > bounds.end_y && item.speed.1 > 0.0
-            {
-                item.speed.1 *= -0.75;
+            if item.pos.1 < bounds.start_y && item.speed.1 < 0.0 {
+                item.speed.1 += 0.5;
+            } else if item.pos.1 > bounds.end_y && item.speed.1 > 0.0 {
+                item.speed.1 -= 0.5;
             }
             //println!(
             //    "\tto: {:?} with speed {:?} collision {}",
             //    item.0, item.2, collision
             //);
-            items[index] = item;
+            items[index] = items[index].clone().set_entity(item);
         }
     }
-    if items.len() > 0 {
-        let mut bounding_box = Area::new(
-            items[0].pos.0,
-            items[0].pos.1,
-            items[0].pos.0,
-            items[0].pos.1,
-        );
-        for item in &mut items {
-            if item.pos.0 - item.size < bounding_box.start_x {
-                bounding_box.start_x = item.pos.0 - item.size
+    if !items.is_empty() {
+        let first = items[0].entity();
+        let mut bounding_box = Area::new(first.pos.0, first.pos.1, first.pos.0, first.pos.1);
+        for node in items.iter_mut() {
+            let item = node.entity();
+            if item.pos.0 - item.radius < bounding_box.start_x {
+                bounding_box.start_x = item.pos.0 - item.radius
             }
-            if item.pos.0 + item.size > bounding_box.end_x {
-                bounding_box.end_x = item.pos.0 + item.size
+            if item.pos.0 + item.radius > bounding_box.end_x {
+                bounding_box.end_x = item.pos.0 + item.radius
             }
-            if item.pos.1 - item.size < bounding_box.start_y {
-                bounding_box.start_y = item.pos.1 - item.size
+            if item.pos.1 - item.radius < bounding_box.start_y {
+                bounding_box.start_y = item.pos.1 - item.radius
             }
-            if item.pos.1 + item.size > bounding_box.end_y {
-                bounding_box.end_y = item.pos.1 + item.size
+            if item.pos.1 + item.radius > bounding_box.end_y {
+                bounding_box.end_y = item.pos.1 + item.radius
             }
         }
         let re_center = bounding_box.center() - center;
-        for item in &mut items {
+        for node in items.iter_mut() {
+            let item = node.entity_mut();
             item.pos = item.pos - re_center;
         }
     }
-    items
-        .iter()
-        .map(
-            |Entity {
-                 pos: Point(x, y),
-                 size,
-                 item,
-                 ..
-             }| {
-                (
-                    Area::new(
-                        x - *size / 2.0,
-                        y - *size / 2.0,
-                        x + *size / 2.0,
-                        y + *size / 2.0,
-                    ),
-                    *item,
-                )
-            },
-        )
-        .collect()
 }
 
-fn get_transform(area: &Area) -> (String, String) {
+fn shrink_folder_sizes(entity: EntityNode) -> EntityNode {
+    match entity {
+        EntityNode::Folder(mut folder_entity, name, mut items) => {
+            if !items.is_empty() {
+                folder_entity.radius = 0.0;
+                for node in &*items {
+                    let item = node.entity();
+                    let dif_0 =
+                        (folder_entity.pos.0 - folder_entity.radius) - (item.pos.0 - item.radius);
+                    let dif_1 =
+                        (item.pos.0 + item.radius) - (folder_entity.pos.0 + folder_entity.radius);
+                    let dif_2 =
+                        (folder_entity.pos.1 - folder_entity.radius) - (item.pos.1 - item.radius);
+                    let dif_3 =
+                        (item.pos.1 + item.radius) - (folder_entity.pos.1 + folder_entity.radius);
+                    let dif = dif_0.max(dif_1.max(dif_2.max(dif_3)));
+                    if dif > 0.0 {
+                        folder_entity.radius += dif
+                    }
+                }
+            }
+            for n in 0..items.len() {
+                items[n] = shrink_folder_sizes(items[n].clone())
+            }
+            EntityNode::Folder(folder_entity, name, items)
+        }
+        e => e,
+    }
+}
+
+fn get_transform(entity: &Entity) -> (String, String) {
+    let area = entity.bounding_box();
     let size = (area.end_x - area.start_x).min(area.end_y - area.start_y) * 1.5;
     let scale = 1024.0 / size;
     let transform_x = area.start_x + (area.end_x - area.start_x) / 2.0 - size / 2.0;

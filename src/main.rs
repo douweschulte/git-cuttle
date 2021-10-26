@@ -20,6 +20,7 @@ fn main() {
     let _ = stdout().flush();
     stdin().read_line(&mut s).expect("Incorrect input");
     let structure = get_structure(Path::new("../pdbtbx"), &[".vscode", "target", ".git"]);
+    println!("{:?}", structure);
     if let Some(item) = structure {
         plot(item, "plot.svg");
     }

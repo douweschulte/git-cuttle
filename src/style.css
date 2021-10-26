@@ -51,6 +51,7 @@ svg {
 .folder>circle {
     fill: none;
     stroke-width: var(--text-scaling);
+    stroke: var(--color-light);
 }
 
 .folder>text {
