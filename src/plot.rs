@@ -6,6 +6,8 @@ use rand::thread_rng;
 use svg::node::element::*;
 use svg::Document;
 
+const MARGIN: f64 = 5.0;
+
 pub fn plot(item: Item, path: &str) {
     let size = 1024.0;
     let margin = 20.0;
@@ -18,6 +20,7 @@ pub fn plot(item: Item, path: &str) {
     improve_positions(&mut entities);
     entities = shrink_folder_sizes(entities);
     improve_positions(&mut entities);
+    entities = shrink_folder_sizes(entities);
     println!("{:?}", entities);
     let (plot, _) = plot_entities(&entities, Group::new().set("id", "view-root"), &entities);
 
@@ -268,7 +271,7 @@ fn improve_folder_positions(entity: &mut Entity, items: &mut Vec<EntityNode>) {
             // handle collisions
             for other_index in (0..items.len()).filter(|i| *i != index) {
                 let other = items[other_index].entity();
-                let min_dis = item.radius + other.radius + 5.0;
+                let min_dis = item.radius + other.radius + MARGIN;
                 if item.pos.distance(other.pos) < min_dis {
                     // 'Bounce' away from the other ball, could maybe break on multiple collisions in a single frame
                     item.speed = (item.pos - other.pos).normalize() - other.speed * 0.75;
@@ -328,19 +331,20 @@ fn improve_folder_positions(entity: &mut Entity, items: &mut Vec<EntityNode>) {
 fn shrink_folder_sizes(entity: EntityNode) -> EntityNode {
     match entity {
         EntityNode::Folder(mut folder_entity, name, mut items) => {
+            for n in 0..items.len() {
+                items[n] = shrink_folder_sizes(items[n].clone())
+            }
             if !items.is_empty() {
                 folder_entity.radius = 0.0;
                 for node in &*items {
                     let item = node.entity();
-                    let distance =
-                        item.pos.distance(folder_entity.pos) + item.radius - folder_entity.radius;
+                    let distance = item.pos.distance(folder_entity.pos) + item.radius
+                        - folder_entity.radius
+                        + MARGIN;
                     if distance > 0.0 {
                         folder_entity.radius += distance
                     }
                 }
-            }
-            for n in 0..items.len() {
-                items[n] = shrink_folder_sizes(items[n].clone())
             }
             EntityNode::Folder(folder_entity, name, items)
         }
