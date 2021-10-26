@@ -18,7 +18,8 @@ pub fn plot(item: Item, path: &str) {
     improve_positions(&mut entities);
     entities = shrink_folder_sizes(entities);
     improve_positions(&mut entities);
-    let plot = plot_entities(entities, Group::new().set("id", "view-root"));
+    println!("{:?}", entities);
+    let (plot, _) = plot_entities(&entities, Group::new().set("id", "view-root"), &entities);
 
     let root = Document::new()
         .set("viewBox", (-margin, -margin, size + margin, size + margin))
@@ -38,6 +39,12 @@ pub fn plot(item: Item, path: &str) {
             "reset-view-button",
             Point(10.0, 50.0),
             "reset_view_button()",
+        ))
+        .add(make_button(
+            "Toggle ref lines",
+            "toggle-references-button",
+            Point(10.0, 90.0),
+            "toggle_references_button()",
         ));
     svg::save(path, &root).unwrap();
 }
@@ -66,8 +73,8 @@ fn get_radius(size: f64, total: (i32, f64)) -> f64 {
     (size.log2() / total.1.log2()) * 1024.0 * 0.5 * 1.0005_f64.powi(total.0)
 }
 
-fn plot_entities(entity: EntityNode, group: Group) -> Group {
-    match entity {
+fn plot_entities(node: &EntityNode, group: Group, root: &EntityNode) -> (Group, Group) {
+    match node {
         EntityNode::File(entity, item) => {
             let circle = Circle::new()
                 .set("cx", entity.pos.0)
@@ -77,9 +84,26 @@ fn plot_entities(entity: EntityNode, group: Group) -> Group {
             let text = Text::new()
                 .set("x", entity.pos.0)
                 .set("y", entity.pos.1)
-                .set("opacity", "var(--file-text-opacity)")
                 .add(svg::node::Text::new(item.name()));
-            group.add(Group::new().add(circle).add(text).set("class", "file"))
+            let mut line_group = Group::new();
+            if let Item::File { refs, .. } = item {
+                for reference in refs {
+                    if let Some(Point(x, y)) = find_ref(reference, root) {
+                        line_group = line_group.add(
+                            Line::new()
+                                .set("x1", entity.pos.0)
+                                .set("y1", entity.pos.1)
+                                .set("x2", x)
+                                .set("y2", y)
+                                .set("class", "ref"),
+                        );
+                    }
+                }
+            }
+            (
+                group.add(Group::new().add(circle).add(text).set("class", "file")),
+                line_group,
+            )
         }
         EntityNode::Folder(entity, name, items) => {
             let circle = Circle::new()
@@ -89,7 +113,6 @@ fn plot_entities(entity: EntityNode, group: Group) -> Group {
             let text = Text::new()
                 .set("x", entity.pos.0)
                 .set("y", entity.pos.1 - entity.radius)
-                .set("opacity", "var(--folder-text-opacity)")
                 .add(svg::node::Text::new(name));
             let (transform, text_scale) = get_transform(&entity);
             let mut folder_group = Group::new()
@@ -98,14 +121,37 @@ fn plot_entities(entity: EntityNode, group: Group) -> Group {
                 .set("class", "folder")
                 .set("data-transform", transform)
                 .set("data-text-scale", text_scale);
-            //.set("onclick", "folder_click");
 
+            let mut lines = Group::new();
             for item in items {
-                folder_group = plot_entities(item, folder_group);
+                let res = plot_entities(item, folder_group, root);
+                folder_group = res.0;
+                lines = lines.add(res.1);
             }
 
-            group.add(folder_group)
+            (group.add(folder_group).add(lines), Group::new())
         }
+    }
+}
+
+fn find_ref(reference: &str, entity: &EntityNode) -> Option<Point> {
+    match entity {
+        EntityNode::File(place, Item::File { name, .. }) => {
+            if name == reference {
+                return Some(place.pos);
+            } else {
+                None
+            }
+        }
+        EntityNode::Folder(_, _, items) => {
+            for item in items {
+                if let Some(p) = find_ref(reference, item) {
+                    return Some(p);
+                }
+            }
+            None
+        }
+        _ => panic!("Not possible"),
     }
 }
 
@@ -286,17 +332,10 @@ fn shrink_folder_sizes(entity: EntityNode) -> EntityNode {
                 folder_entity.radius = 0.0;
                 for node in &*items {
                     let item = node.entity();
-                    let dif_0 =
-                        (folder_entity.pos.0 - folder_entity.radius) - (item.pos.0 - item.radius);
-                    let dif_1 =
-                        (item.pos.0 + item.radius) - (folder_entity.pos.0 + folder_entity.radius);
-                    let dif_2 =
-                        (folder_entity.pos.1 - folder_entity.radius) - (item.pos.1 - item.radius);
-                    let dif_3 =
-                        (item.pos.1 + item.radius) - (folder_entity.pos.1 + folder_entity.radius);
-                    let dif = dif_0.max(dif_1.max(dif_2.max(dif_3)));
-                    if dif > 0.0 {
-                        folder_entity.radius += dif
+                    let distance =
+                        item.pos.distance(folder_entity.pos) + item.radius - folder_entity.radius;
+                    if distance > 0.0 {
+                        folder_entity.radius += distance
                     }
                 }
             }

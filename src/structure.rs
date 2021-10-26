@@ -21,13 +21,21 @@ pub fn get_structure(path: &Path, ignore: &[&str]) -> Option<Item> {
     } else if path.is_file() {
         if let Ok(meta) = path.metadata() {
             //let matches = patterns.find_iter(&s);
-            let name = path.file_name().map(|s| s.to_str()).flatten()?.to_string();
+            let name = path
+                .file_name()
+                .map(|s| s.to_str())
+                .flatten()?
+                .trim()
+                .to_string();
             Some(Item::File {
                 name,
-                full_name: path.to_str()?.to_string(),
+                full_name: path.to_str()?.trim().to_string(),
                 size: if meta.len() == 0 { 1 } else { meta.len() },
                 class: find_class(path),
-                refs: find_refs(path),
+                refs: find_refs(path)
+                    .iter()
+                    .map(|s| s.trim().to_string())
+                    .collect(),
             })
         } else {
             None

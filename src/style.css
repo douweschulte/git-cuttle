@@ -1,6 +1,7 @@
 :root {
     --file-text-opacity: 1;
     --folder-text-opacity: 1;
+    --reference-opacity: 1;
     --color-primary: #569CD6;
     --color-primary-shade: #1d4f78;
     --color-secondary: #4EC9B0;
@@ -44,8 +45,13 @@ svg {
     stroke-width: 2;
 }
 
-.file:hover text {
-    opacity: 1;
+.file:hover {
+    --file-text-opacity: 1;
+    --reference-opacity: 1;
+}
+
+.file text {
+    opacity: var(--file-text-opacity);
 }
 
 .folder>circle {
@@ -56,5 +62,12 @@ svg {
 
 .folder>text {
     fill: var(--color-dark);
+    opacity: var(--folder-text-opacity);
     transform: translateY(calc(-5 * var(--text-scaling)));
+}
+
+.ref {
+    stroke: var(--color-dark);
+    stroke-width: calc(var(--text-scaling) * 2px);
+    opacity: var(--reference-opacity);
 }
